@@ -206,7 +206,7 @@ void loop() {
     Serial.print(AQIArr[i]);
     Serial.println(" -");
     Serial.print(TVOCArr[i]);
-    Serial.println(" ppm");
+    Serial.println(" ppb");
 
     if (calibrateRequested) {
       Serial.println("Pred dalsim setom merani nastane kalibracia");
