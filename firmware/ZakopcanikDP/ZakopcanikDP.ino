@@ -20,16 +20,18 @@
 // WiFi
 const char* ssid = "";
 const char* password = "";
-
 const char* serverURL = "";
 
+#define CO2_IN 16      //D0 - MH-Z19 PWM IN
+#define CALIB_PIN 2   //D4 - MH-Z19 Calibration pin
+#define SWITCH_PIN 0  //D3 - Calibration button
+#define CS_PIN 15  //D8 - Chip select pin
 
-//I2C on pins:           D2:SDA D1:SCL
-#define LED_PIN 2      //D4 - signal LED
-#define CO2_IN 14      //D5 - MH-Z19 PWM IN
-#define CALIB_PIN 12   //D6 - MH-Z19 Calibration pin
-#define SWITCH_PIN 13  //D7 - Calibration button
+//SD card file
+File myFile;
 
+//Wifi connect timer
+int connectTimer = 0;
 
 //Calibration ISR
 volatile bool calibrateRequested = false;
@@ -49,12 +51,14 @@ float tempArr[10];
 float humArr[10];
 float CO2Arr[10];
 float AQIArr[10];
+float TVOCArr[10];
 
 //Avgs of measured values
 float tempAvg = 0;
 float humAvg = 0;
 float CO2Avg = 0;
 float AQIAvg = 0;
+float TVOCAvg = 0;
 
 bool isWarm = false;
 
@@ -76,11 +80,7 @@ void IRAM_ATTR handleCalibrationInterrupt() {
 
 //-------------------------------------------------SETUP
 void setup() {
-  blink(500, 2);  //zaciatok seutpu
   Serial.begin(115200);
-
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH);  // Turn off built-in LED (active LOW)
 
   //MH-Z19 setup
   pinMode(CO2_IN, INPUT);
@@ -103,10 +103,51 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
     Serial.print(".");
+    if (connectTimer >= 15) {
+      break;
+    }
+    connectTimer++;
   }
-  Serial.println("\nPripojene na WiFi");
 
-  blink(500, 2);  //Setup complete
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nPripojene na Wifi");
+  } else {
+    Serial.println("\nNepodarilo sa pripojit na Wifi");
+  }
+
+  //setup SD karty
+  Serial.print("Initializing SD card...");
+  if (!SD.begin(CS_PIN)) {
+    Serial.println("initialization failed!");
+    return;
+  }
+  Serial.println("initialization done.");
+  // only one file can be open at a time, closing necessary after done with it
+  myFile = SD.open("test.txt", FILE_WRITE);
+
+  // write to file
+  if (myFile) {
+    Serial.print("Writing to test.txt...");
+    myFile.println("Zaciatok merania");
+    myFile.close();
+    Serial.println("done.");
+  } else {
+    // print error if file didnt open
+    Serial.println("error opening test.txt");
+  }
+
+  // reopen the file for reading
+  myFile = SD.open("test.txt");
+  if (myFile) {
+    Serial.println("test.txt:");
+    // read from the file until theres nothing else in it
+    while (myFile.available()) { Serial.write(myFile.read()); }
+    myFile.close();
+  } else {
+    // print error if file didnt open
+    Serial.println("error opening test.txt");
+  }
+
 }
 //-------------------------------------------------LOOP
 void loop() {
@@ -129,7 +170,6 @@ void loop() {
       Serial.println("s / 180s");
       lastStatusMillis = currentMillis;
 
-      //blink(100, 1);  // Blink once every 5s for feedback
     }
 
     if (currentMillis - warmupStartMillis >= interval) {
@@ -139,8 +179,6 @@ void loop() {
 
     return;
   }
-
-  digitalWrite(LED_PIN, LOW);  // Turn LED on (active LOW)
 
 
   for (int i = 0; i < 10; i++) {
@@ -153,8 +191,9 @@ void loop() {
     CO2Arr[i] = co2.readCO2PWM();
 
     //ENS160
-    ENS160.setTempAndHum(tempArr[i], humArr[i]);  //set parameters for correct AQI measuremet
+    ENS160.setTempAndHum(tempArr[i], humArr[i]);  //set parameters for correct AQI and TVOC measuremet
     AQIArr[i] = ENS160.getAQI();
+    TVOCArr[i] = ENS160.getTVOC();
 
     Serial.print(i);
     Serial.print("/10: ");
@@ -166,6 +205,8 @@ void loop() {
     Serial.print(" ppm, ");
     Serial.print(AQIArr[i]);
     Serial.println(" -");
+    Serial.print(TVOCArr[i]);
+    Serial.println(" ppm");
 
     if (calibrateRequested) {
       Serial.println("Pred dalsim setom merani nastane kalibracia");
@@ -178,6 +219,7 @@ void loop() {
   humAvg = average(humArr);
   CO2Avg = average(CO2Arr);
   AQIAvg = average(AQIArr);
+  TVOCAvg = average(TVOCArr);
 
   if (calibrating) {
     CO2Avg = 0;
@@ -188,8 +230,12 @@ void loop() {
     }
   }
 
-  String formattedData = "{\"CO2\":" + String(CO2Avg, 0) + "," + "\"humidity\":" + String(humAvg, 1) + "," + "\"temperature\":" + String(tempAvg, 2) + "," + "\"index\":" + String(AQIAvg, 0) + "}";
+  //JSON print
+  //String formattedData = "{\"CO2\":" + String(CO2Avg, 0) + "," + "\"humidity\":" + String(humAvg, 1) + "," + "\"temperature\":" + String(tempAvg, 2) + "," + "\"index\":" + String(AQIAvg, 0) + "\"tvoc\":" + String(TVOCAvg, 0) "}";
   
+  //CSV print
+  String formattedData = String(CO2Avg, 0) + "," + String(humAvg, 1) + "," + String(tempAvg, 2) + "," + String(AQIAvg, 0) + "," + String(TVOCAvg, 0);
+
   Serial.print("Odoslane data: ");
   Serial.print(tempAvg);
   Serial.print(" °C, ");
@@ -198,16 +244,34 @@ void loop() {
   Serial.print(CO2Avg);
   Serial.print(" ppm, ");
   Serial.print(AQIAvg);
-  Serial.println(" -");
+  Serial.println(" -, ");
+  Serial.print(TVOCAvg);
+  Serial.print(" ppb");
   Serial.println(formattedData);
+
+  //write data to SD card
+  myFile = SD.open("test.txt", FILE_WRITE);
+  if (myFile) {
+    Serial.print("Writing formatted data to test.txt...");
+    myFile.println(formattedData);
+    myFile.close();
+    Serial.println("done writing formatted data.");
+  } else {
+    // print error if file didnt open
+    Serial.println("error opening test.txt");
+  }
 
 
   if (WiFi.status() == WL_CONNECTED) {
     WiFiClient client;
     HTTPClient http;
     http.begin(client, serverURL);
-    http.addHeader("Content-Type", "application/json");
 
+    //pre JSON
+    //http.addHeader("Content-Type", "application/json");
+
+    //pre CSV
+    http.addHeader("Content-Type", "text/csv");
     int httpResponseCode = http.POST(formattedData);
  
     if (httpResponseCode > 0) {
@@ -222,8 +286,6 @@ void loop() {
   } else {
     Serial.println("WiFi nie je pripojena");
   }
-
-  blink(200, 5);  // Blink after sending data
 
 
   //turn on calibration
@@ -240,7 +302,6 @@ void loop() {
     calibrating = true;
     calibrateCount = 0;
 
-    blink(100, 10);
   }
 }
 
@@ -252,15 +313,3 @@ float average(float arr[]) {
   }
   return val / 10.0;
 }
-
-void blink(int time, int count) {
-  for (int i = 0; i < count; i++) {
-    digitalWrite(LED_PIN, LOW);  // Turn on (active LOW)
-    delay(time);
-    digitalWrite(LED_PIN, HIGH);  // Turn off
-    delay(time);
-  }
-}
-
-
-
