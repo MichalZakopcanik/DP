@@ -33,6 +33,11 @@ File myFile;
 //Wifi connect timer
 int connectTimer = 0;
 
+//Time since the start of the program, will be used with millis() and saved into csv/json data, can calculate time of measurement if the start time of program is known
+//millis() overflows after approximately 50 daysm
+//TODO: replace with NTP if wifi available, if not buy external RTC module and use that
+unsigned long measurementTime;
+
 //Calibration ISR
 volatile bool calibrateRequested = false;
 volatile unsigned long lastInterruptTime = 0;
@@ -180,7 +185,7 @@ void loop() {
     return;
   }
 
-
+  // measuring every 6 seconds, 10 measurement total, then averaging it -> 1 minute average
   for (int i = 0; i < 10; i++) {
     //BME680
     bme.performReading();
@@ -204,7 +209,7 @@ void loop() {
     Serial.print(CO2Arr[i]);
     Serial.print(" ppm, ");
     Serial.print(AQIArr[i]);
-    Serial.println(" -");
+    Serial.print(" -, ");
     Serial.print(TVOCArr[i]);
     Serial.println(" ppb");
 
@@ -220,7 +225,9 @@ void loop() {
   CO2Avg = average(CO2Arr);
   AQIAvg = average(AQIArr);
   TVOCAvg = average(TVOCArr);
+  measurementTime = millis();
 
+  //measuring in the for cycle above takes 1 minute, so when calibrateCount > 20, 21 minutes have passed
   if (calibrating) {
     CO2Avg = 0;
     calibrateCount++;
@@ -231,12 +238,14 @@ void loop() {
   }
 
   //JSON print
-  //String formattedData = "{\"CO2\":" + String(CO2Avg, 0) + "," + "\"humidity\":" + String(humAvg, 1) + "," + "\"temperature\":" + String(tempAvg, 2) + "," + "\"index\":" + String(AQIAvg, 0) + "\"tvoc\":" + String(TVOCAvg, 0) "}";
+  //String formattedData = "{\"time\":" + String(measurementTime) + "," + "\"CO2\":" + String(CO2Avg, 0) + "," + "\"humidity\":" + String(humAvg, 1) + "," + "\"temperature\":" + String(tempAvg, 2) + "," + "\"index\":" + String((int)round(AQIAvg)) + "\"tvoc\":" + String(TVOCAvg, 0) "}";
   
   //CSV print
-  String formattedData = String(CO2Avg, 0) + "," + String(humAvg, 1) + "," + String(tempAvg, 2) + "," + String(AQIAvg, 0) + "," + String(TVOCAvg, 0);
+  String formattedData = String(measurementTime) + "," + String(CO2Avg, 0) + "," + String(humAvg, 1) + "," + String(tempAvg, 2) + "," + String((int)round(AQIAvg)) + "," + String(TVOCAvg, 0);
 
   Serial.print("Odoslane data: ");
+  Serial.print(measurementTime);
+  Serial.print(" ms, ");
   Serial.print(tempAvg);
   Serial.print(" °C, ");
   Serial.print(humAvg);
@@ -244,9 +253,9 @@ void loop() {
   Serial.print(CO2Avg);
   Serial.print(" ppm, ");
   Serial.print(AQIAvg);
-  Serial.println(" -, ");
+  Serial.print(" -, ");
   Serial.print(TVOCAvg);
-  Serial.print(" ppb");
+  Serial.println(" ppb");
   Serial.println(formattedData);
 
   //write data to SD card
