@@ -6,6 +6,8 @@
 #include <Adafruit_BME680.h>
 #include <bme68x.h>
 #include <bme68x_defs.h>
+//HM3301 - PM1.0,2.5,10
+#include "Seeed_HM330X.h"
 //I2C
 #include <Wire.h>
 //Web comm.
@@ -57,6 +59,12 @@ float humArr[10];
 float CO2Arr[10];
 float AQIArr[10];
 float TVOCArr[10];
+float PM1Arr[10];
+float PM2Arr[10]; //PM2,5
+float PM10Arr[10];
+
+//Position of PM array element 
+int position = 0;
 
 //Avgs of measured values
 float tempAvg = 0;
@@ -64,6 +72,9 @@ float humAvg = 0;
 float CO2Avg = 0;
 float AQIAvg = 0;
 float TVOCAvg = 0;
+float PM1Avg = 0;
+float PM2Avg = 0;
+float PM10Avg = 0;
 
 bool isWarm = false;
 
@@ -72,6 +83,8 @@ bool isWarm = false;
 Adafruit_BME680 bme(&Wire);
 DFRobot_ENS160_I2C ENS160(&Wire, 0x53);
 MHZ co2(CO2_IN, MHZ19B);
+HM330X pm;
+u8 buf[30]; //for HM3301
 
 //Calibration trigger ISR
 void IRAM_ATTR handleCalibrationInterrupt() {
@@ -82,10 +95,49 @@ void IRAM_ATTR handleCalibrationInterrupt() {
   }
 }
 
+/*parse buf with 29 u8-data*/
+HM330XErrorCode parse_result(int position, u8 *data)
+{
+    u16 value=0;
+    if(NULL==data)
+        return ERROR_PARAM;
+    for(int i=1;i<8;i++)
+    {
+        value = (u16)data[i*2]<<8|data[i*2+1];
+        switch(i){
+          case 2:
+            PM1Arr[position] = value;
+            break;
+
+          case 3:
+            PM2Arr[position] = value;
+            break;
+
+          case 4:
+            PM10Arr[position] = value;
+            break;
+
+          default:
+            break;
+        }
+    }
+
+    return NO_ERROR;
+}
+
 
 //-------------------------------------------------SETUP
 void setup() {
   Serial.begin(115200);
+  delay(100);
+  Serial.println("Serial start");
+
+  //HM3301 setup
+  if(pm.init())
+  {
+      Serial.println("HM330X init failed!!!");
+      while(1);
+  }
 
   //MH-Z19 setup
   pinMode(CO2_IN, INPUT);
@@ -120,7 +172,7 @@ void setup() {
     Serial.println("\nNepodarilo sa pripojit na Wifi");
   }
 
-  //setup SD karty
+  //SD card setup
   Serial.print("Initializing SD card...");
   if (!SD.begin(CS_PIN)) {
     Serial.println("initialization failed!");
@@ -200,6 +252,14 @@ void loop() {
     AQIArr[i] = ENS160.getAQI();
     TVOCArr[i] = ENS160.getTVOC();
 
+    //HM3301
+    if(pm.read_sensor_value(buf,29))
+    {
+        Serial.println("HM330X read result failed!!!");
+    }
+    position = i;
+    parse_result(position, buf);
+
     Serial.print(i);
     Serial.print("/10: ");
     Serial.print(tempArr[i]);
@@ -211,7 +271,13 @@ void loop() {
     Serial.print(AQIArr[i]);
     Serial.print(" -, ");
     Serial.print(TVOCArr[i]);
-    Serial.println(" ppb");
+    Serial.print(" ppb, ");
+    Serial.print(PM1Arr[i]);
+    Serial.print(" ug/m3, ");
+    Serial.print(PM2Arr[i]);
+    Serial.print(" ug/m3, ");
+    Serial.print(PM10Arr[i]);
+    Serial.println(" ug/m3");
 
     if (calibrateRequested) {
       Serial.println("Pred dalsim setom merani nastane kalibracia");
@@ -225,6 +291,9 @@ void loop() {
   CO2Avg = average(CO2Arr);
   AQIAvg = average(AQIArr);
   TVOCAvg = average(TVOCArr);
+  PM1Avg = average(PM1Arr);
+  PM2Avg = average(PM2Arr);
+  PM10Avg = average(PM10Arr);
   measurementTime = millis();
 
   //measuring in the for cycle above takes 1 minute, so when calibrateCount > 20, 21 minutes have passed
@@ -238,10 +307,10 @@ void loop() {
   }
 
   //JSON print
-  //String formattedData = "{\"time\":" + String(measurementTime) + "," + "\"CO2\":" + String(CO2Avg, 0) + "," + "\"humidity\":" + String(humAvg, 1) + "," + "\"temperature\":" + String(tempAvg, 2) + "," + "\"index\":" + String((int)round(AQIAvg)) + "\"tvoc\":" + String(TVOCAvg, 0) "}";
+  //String formattedData = "{\"time\":" + String(measurementTime) + "," + "\"CO2\":" + String(CO2Avg, 0) + "," + "\"humidity\":" + String(humAvg, 1) + "," + "\"temperature\":" + String(tempAvg, 2) + "," + "\"index\":" + String((int)round(AQIAvg)) + "," + "\"tvoc\":" + String(TVOCAvg, 0) + "," + "\"pm1\":" + String(PM1Avg, 2) + "," + "\"pm2\":" + String(PM2Avg, 2) + "," + "\"pm10\":" + String(PM10Avg, 2) + "}";
   
   //CSV print
-  String formattedData = String(measurementTime) + "," + String(CO2Avg, 0) + "," + String(humAvg, 1) + "," + String(tempAvg, 2) + "," + String((int)round(AQIAvg)) + "," + String(TVOCAvg, 0);
+  String formattedData = String(measurementTime) + "," + String(CO2Avg, 0) + "," + String(humAvg, 1) + "," + String(tempAvg, 2) + "," + String((int)round(AQIAvg)) + "," + String(TVOCAvg, 0) + "," + String(PM1Avg, 2) + "," + String(PM2Avg, 2) + "," + String(PM10Avg, 2);
 
   Serial.print("Odoslane data: ");
   Serial.print(measurementTime);
@@ -255,7 +324,13 @@ void loop() {
   Serial.print(AQIAvg);
   Serial.print(" -, ");
   Serial.print(TVOCAvg);
-  Serial.println(" ppb");
+  Serial.print(" ppb, ");
+  Serial.print(PM1Avg);
+  Serial.print(" ug/m3, ");
+  Serial.print(PM2Avg);
+  Serial.print(" ug/m3, ");
+  Serial.print(PM10Avg);
+  Serial.println(" ug/m3");
   Serial.println(formattedData);
 
   //write data to SD card
