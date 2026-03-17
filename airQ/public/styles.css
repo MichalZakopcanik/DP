@@ -1,0 +1,102 @@
+:root{
+  --base-color: white;
+  --base-variant: #babdc7;
+  --text-color: #111528;
+  --secondary-text: #232738;
+  --button-background: #c4c5c7;
+  --button-text: #000000;
+  --accent-color: #0071ff;
+}
+.darkmode{
+  --base-color: #070b1d;
+  --base-variant: #101425;
+  --text-color: #ffffff;
+  --secondary-text: #a4a5b8;
+  --button-background: #ffffff;
+  --button-text: #000000;
+  --accent-color: #0071ff;
+}
+*{
+  margin: 0;
+  padding: 0;
+}
+html{
+  font-family: Poppins;
+}
+body{
+  min-height: 100vh;
+  background-color: var(--base-color);
+  color: var(--text-color);
+  padding: 70px min(50px, 7%);
+  transition-property: background-color, color;
+  transition-duration: .3s, .3s;
+}
+header, section{
+  padding: 70px min(50px, 7%);
+}
+section{
+  background-color: var(--base-variant);
+}
+p{
+  margin: 10px 10px 20px 10px;
+  color: var(--secondary-text);
+}
+button{
+  border: none;
+  padding: 2em 2em 2em 2em;
+  margin: 5px 5px 5px 5px;
+  background-color: var(--button-background);
+  color: var(--button-text);
+  border-radius: 4px;
+  font: inherit;
+  text-transform: uppercase;
+  font-weight: 500;
+  cursor: pointer;
+  transition-duration: .3s, .3s;
+}
+#air-quality-last-data{
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.card{
+  padding: .8em .8em .8em .8em;
+  border: 4px solid #000000;
+  background-color: var(--button-background);
+  color: var(--button-text);
+  border-radius: 2px;
+  font: inherit;
+  font-weight: 550;
+  flex:auto;
+  transition-duration: .3s, .3s;
+}
+#theme-toggle-btn{
+  height: 50px;
+  width: 50px;
+  padding: 0;
+  border-radius: 50%;
+  background-color: var(--button-background);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  transition-duration: .3s, .3s;
+}
+#theme-toggle-btn img{
+  fill: var(--button-background);
+}
+#theme-toggle-btn img:last-child{
+  display: none;
+}
+.darkmode #theme-toggle-btn img:first-child{
+  display: none;
+}
+.darkmode #theme-toggle-btn img:last-child{
+  display: block;
+}
+.theme-toggle-icon{
+  width: 24px;
+  height: 24px;
+}

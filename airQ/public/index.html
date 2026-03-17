@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <link rel="stylesheet" type = "text/css" href="styles.css">
+    <script src="/socket.io/socket.io.js" defer></script>
+    <script src="https://cdn.plot.ly/plotly-3.4.0.min.js" charset="utf-8"></script>
+    <script type = "module" src="script.js" defer></script>
+</head>
+<body>
+    <header>
+        <h1>Air Quality Dashboard</h1>
+        <button id="theme-toggle-btn">
+            <img class="theme-toggle-icon" src="light_mode_24dp_E3E3E3_FILL1_wght400_GRAD0_opsz24.png" alt="Toggle to light Mode">
+            <img class="theme-toggle-icon" src="dark_mode_24dp_E3E3E3_FILL1_wght400_GRAD0_opsz24.png" alt="Toggle to dark mode">
+        </button>
+    </header>
+    <h2>Current Air Quality</h2>
+    <div id="air-quality-last-data">
+        <p id="timestamp" class="card">Posledné meranie: --</p>
+        <p id="temperature" class="card">Temperature: -- °C</p>
+        <p id="humidity" class="card">Humidity: -- %</p>
+        <p id="aqi" class="card">AQI: --</p>
+        <p id="pm1" class="card">PM1: -- µg/m³</p>
+        <p id="pm2" class="card">PM2.5: -- µg/m³</p>
+        <p id="pm10" class="card">PM10: -- µg/m³</p>
+        <p id="co2" class="card">CO2: -- ppm</p>
+        <p id="tvoc" class="card">TVOC: -- ppb</p>
+    </div>
+    <div id = "graph-buttons">
+        <button id="graph-btn-hour">Posledná hodina</button>
+        <button id="graph-btn-day">Posledný deň</button>
+        <button id="graph-btn-week">Posledný týždeň</button>
+        <button id="graph-btn-month">Posledný mesiac</button>
+        <button id="graph-btn-6months">Posledných 6 mesiacov</button>
+    </div>
+    <div id = "graphs">
+        <div id="graphDiv"></div>
+        <div id="graphDiv2"></div>
+        <div id="graphDiv3"></div>
+    </div>
+
+</body>
+</html>
