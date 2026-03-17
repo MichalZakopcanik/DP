@@ -18,10 +18,14 @@
 #include <SPI.h>
 #include <SD.h>
 
+//MQTT
+#include <Ticker.h>
+#include <AsyncMqttClient.h>
+
 //-------------------------------------------------DECLARATIONS
 // WiFi
-const char* ssid = "";
-const char* password = "";
+const char* wifiSsid = "";  //replace with your wifi credentials
+const char* wifiPassword = "";
 const char* serverURL = "";
 
 #define CO2_IN 16      //D0 - MH-Z19 PWM IN
@@ -31,6 +35,7 @@ const char* serverURL = "";
 
 //SD card file
 File myFile;
+int lineCounter = 0;
 
 //Wifi connect timer
 int connectTimer = 0;
@@ -86,6 +91,80 @@ MHZ co2(CO2_IN, MHZ19B);
 HM330X pm;
 u8 buf[30]; //for HM3301
 
+// MQTT setup
+#define MQTT_HOST IPAddress(example_num1, example_num2, example_num3, example_num4) //replace with your MQTT IP address
+#define MQTT_PORT example_num //replace with your MQTT port
+
+#define MQTT_PUB_DATA "/example/data" //replace with your topic
+
+AsyncMqttClient mqttClient;
+Ticker mqttReconnectTimer;
+
+WiFiEventHandler wifiConnectHandler;
+WiFiEventHandler wifiDisconnectHandler;
+Ticker wifiReconnectTimer;
+
+void connectToWifi() {
+  Serial.println("Connecting to Wi-Fi...");
+  WiFi.begin(wifiSsid, wifiPassword);
+}
+
+void onWifiConnect(const WiFiEventStationModeGotIP& event) {
+  Serial.println("\nConnected to Wi-Fi.");
+  connectToMqtt();
+}
+
+void onWifiDisconnect(const WiFiEventStationModeDisconnected& event) {
+  Serial.println("Disconnected from Wi-Fi.");
+  mqttReconnectTimer.detach(); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi
+  wifiReconnectTimer.once(2, connectToWifi);
+}
+
+void connectToMqtt() {
+  Serial.println("Connecting to MQTT...");
+  mqttClient.connect();
+}
+
+void onMqttConnect(bool sessionPresent) {
+  Serial.println("Connected to MQTT.");
+  Serial.print("Session present: ");
+  Serial.println(sessionPresent);
+}
+
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
+  Serial.println("Disconnected from MQTT.");
+
+  if (WiFi.isConnected()) {
+    mqttReconnectTimer.once(2, connectToMqtt);
+  }
+}
+
+/*void onMqttSubscribe(uint16_t packetId, uint8_t qos) {
+  Serial.println("Subscribe acknowledged.");
+  Serial.print("  packetId: ");
+  Serial.println(packetId);
+  Serial.print("  qos: ");
+  Serial.println(qos);
+}
+
+void onMqttUnsubscribe(uint16_t packetId) {
+  Serial.println("Unsubscribe acknowledged.");
+  Serial.print("  packetId: ");
+  Serial.println(packetId);
+}*/
+
+void onMqttPublish(uint16_t packetId) {
+  Serial.print("Publish acknowledged.");
+  Serial.print("  packetId: ");
+  Serial.println(packetId);
+}
+
+void mqttPublish(const char* topic, const char* data) {
+  uint16_t packetIdPub = mqttClient.publish(topic, 1, true, data);
+  Serial.printf("Publishing on topic %s at QoS 1, packetId: %i\n", topic, packetIdPub);
+  Serial.printf("Message: %s \n", data);
+}
+
 //Calibration trigger ISR
 void IRAM_ATTR handleCalibrationInterrupt() {
   unsigned long currentTime = millis();
@@ -95,7 +174,7 @@ void IRAM_ATTR handleCalibrationInterrupt() {
   }
 }
 
-/*parse buf with 29 u8-data*/
+/*parse buf with 29 u8-data - function for getting data from HM3301*/
 HM330XErrorCode parse_result(int position, u8 *data)
 {
     u16 value=0;
@@ -154,8 +233,20 @@ void setup() {
   ENS160.begin();
   ENS160.setPWRMode(ENS160_STANDARD_MODE);
 
+  wifiConnectHandler = WiFi.onStationModeGotIP(onWifiConnect);
+  wifiDisconnectHandler = WiFi.onStationModeDisconnected(onWifiDisconnect);
+  
+  mqttClient.onConnect(onMqttConnect);
+  mqttClient.onDisconnect(onMqttDisconnect);
+  //mqttClient.onSubscribe(onMqttSubscribe);
+  //mqttClient.onUnsubscribe(onMqttUnsubscribe);
+  mqttClient.onPublish(onMqttPublish);
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  //mqttClient.setCredentials("REPlACE_WITH_YOUR_USER", "REPLACE_WITH_YOUR_PASSWORD");
+  
+
   // Connect to Wi-Fi
-  WiFi.begin(ssid, password);
+  connectToWifi();
   Serial.print("Pripajam sa na WiFi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
@@ -166,9 +257,7 @@ void setup() {
     connectTimer++;
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nPripojene na Wifi");
-  } else {
+  if (WiFi.status() != WL_CONNECTED) {
     Serial.println("\nNepodarilo sa pripojit na Wifi");
   }
 
@@ -198,7 +287,9 @@ void setup() {
   if (myFile) {
     Serial.println("test.txt:");
     // read from the file until theres nothing else in it
-    while (myFile.available()) { Serial.write(myFile.read()); }
+    while (myFile.available()) { myFile.read(); lineCounter++;}
+    Serial.print("Pocet riadkov v subore: ");
+    Serial.println(lineCounter);
     myFile.close();
   } else {
     // print error if file didnt open
@@ -347,6 +438,34 @@ void loop() {
 
 
   if (WiFi.status() == WL_CONNECTED) {
+    //odosielanie dat cez MQTT
+    
+    String tstmpStr = String(measurementTime);
+    String tempStr = String(tempAvg, 2);
+    String humStr = String(humAvg, 1);
+    String pm1Str = String(PM1Avg, 2);
+    String pm2Str = String(PM2Avg, 2);
+    String pm10Str = String(PM10Avg, 2);
+    String co2Str = String(CO2Avg, 0);
+    String aqiStr = String((int)round(AQIAvg));
+    String tvocStr = String(TVOCAvg, 0);
+
+    String payload = "{"
+      "\"millisTimestamp\":\"" + tstmpStr + "\","
+      "\"temperature\":\"" + tempStr + "\","
+      "\"humidity\":\"" + humStr + "\","
+      "\"pm1\":\"" + pm1Str + "\","
+      "\"pm2\":\"" + pm2Str + "\","
+      "\"pm10\":\"" + pm10Str + "\","
+      "\"co2\":\"" + co2Str + "\","
+      "\"aqi\":\"" + aqiStr + "\","
+      "\"tvoc\":\"" + tvocStr + "\""
+    "}";
+
+    mqttPublish(MQTT_PUB_DATA, payload.c_str());
+
+    /* Ak by som odosielal informacie na konkretny server
+    
     WiFiClient client;
     HTTPClient http;
     http.begin(client, serverURL);
@@ -366,7 +485,7 @@ void loop() {
       Serial.println(httpResponseCode);
     }
 
-    http.end();
+    http.end();*/
   } else {
     Serial.println("WiFi nie je pripojena");
   }
