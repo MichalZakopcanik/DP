@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <link rel="stylesheet" type = "text/css" href="styles.css">
+    <script src="/socket.io/socket.io.js" defer></script>
+    <script src="plotly.min.js"></script>
+    <script type = "module" src="graphLogic.js" defer></script>
+</head>
+<body>
+    <div id="content">
+    <div class="positioner">
+        <nav class="navigation">
+            <ul>
+                <li><a href="../index.html">Latest Data</a></li>
+                <li><a href="#">Graph Data</a></li>
+            </ul>
+        </nav>
+    </div>
+    <header>
+        <h1 id="app-name">Air Quality Dashboard</h1>
+        <button id="theme-toggle-btn">
+            <img class="theme-toggle-icon" src="light_mode_24dp_E3E3E3_FILL1_wght400_GRAD0_opsz24.png" alt="Toggle to light Mode">
+            <img class="theme-toggle-icon" src="dark_mode_24dp_E3E3E3_FILL1_wght400_GRAD0_opsz24.png" alt="Toggle to dark mode">
+        </button>
+    </header>
+    
+    <h2 id="part-name">Historické údaje</h2>
+    <div class="positioner">
+        <div id = "graph-buttons">
+            <button id="graph-btn-hour">Posledná hodina</button>
+            <button id="graph-btn-day">Posledný deň</button>
+            <button id="graph-btn-week">Posledný týždeň</button>
+            <button id="graph-btn-month">Posledný mesiac</button>
+            <button id="graph-btn-6months">Posledných 6 mesiacov</button>
+        </div>
+    </div>
+    <div class="positioner">
+        <div id = "graphs">
+            <div id="graphDiv"></div>
+            <div id="graphDiv2"></div>
+            <div id="graphDiv3"></div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

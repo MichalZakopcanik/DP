@@ -6,41 +6,166 @@
     <title>Document</title>
     <link rel="stylesheet" type = "text/css" href="styles.css">
     <script src="/socket.io/socket.io.js" defer></script>
-    <script src="https://cdn.plot.ly/plotly-3.4.0.min.js" charset="utf-8"></script>
-    <script type = "module" src="script.js" defer></script>
+    <script src="plotly.min.js"></script>
+    <script type = "module" src="latestDataLogic.js" defer></script>
 </head>
 <body>
-    <header>
-        <h1>Air Quality Dashboard</h1>
-        <button id="theme-toggle-btn">
-            <img class="theme-toggle-icon" src="light_mode_24dp_E3E3E3_FILL1_wght400_GRAD0_opsz24.png" alt="Toggle to light Mode">
-            <img class="theme-toggle-icon" src="dark_mode_24dp_E3E3E3_FILL1_wght400_GRAD0_opsz24.png" alt="Toggle to dark mode">
-        </button>
-    </header>
-    <h2>Current Air Quality</h2>
-    <div id="air-quality-last-data">
-        <p id="timestamp" class="card">Posledné meranie: --</p>
-        <p id="temperature" class="card">Temperature: -- °C</p>
-        <p id="humidity" class="card">Humidity: -- %</p>
-        <p id="aqi" class="card">AQI: --</p>
-        <p id="pm1" class="card">PM1: -- µg/m³</p>
-        <p id="pm2" class="card">PM2.5: -- µg/m³</p>
-        <p id="pm10" class="card">PM10: -- µg/m³</p>
-        <p id="co2" class="card">CO2: -- ppm</p>
-        <p id="tvoc" class="card">TVOC: -- ppb</p>
+    <div id="content">
+        <div class="positioner">
+            <nav class="navigation">
+                <ul>
+                    <li><a href="#">Latest Data</a></li>
+                    <li><a href="/graphs.html">Graph Data</a></li>
+                </ul>
+            </nav>
+        </div>
+        <header>
+            <h1 id="app-name">Air Quality Dashboard</h1>
+            <button id="theme-toggle-btn">
+                <img class="theme-toggle-icon" src="light_mode_24dp_E3E3E3_FILL1_wght400_GRAD0_opsz24.png" alt="Toggle to light Mode">
+                <img class="theme-toggle-icon" src="dark_mode_24dp_E3E3E3_FILL1_wght400_GRAD0_opsz24.png" alt="Toggle to dark mode">
+            </button>
+        </header>
+        <h2 id="part-name">Aktuálna kvalita ovzdušia</h2>
+        <div class="positioner">
+            <div id="air-quality-last-data">
+                <div id="timestamp" class="card">
+                    <p class = "card-title">Posledné meranie</p>
+                    <p class = "card-value">--</p> 
+                </div>
+                <div id="temperature" class="card">
+                    <p class = "card-title">Temperature</p>
+                    <p class = "card-value">-- °C</p>
+                </div>
+                <div id="humidity" class="card">
+                    <p class = "card-title">Humidity</p>
+                    <p class = "card-value">-- %</p>
+                </div>
+                <div id="aqi" class="card">
+                    <p class = "card-title">AQI</p>
+                    <p class = "card-value">--</p>
+                </div>
+                <div id="pm1" class="card">
+                    <p class = "card-title">PM1</p>
+                    <p class = "card-value">-- µg/m³</p>
+                </div>
+                <div id="pm2" class="card">
+                    <p class = "card-title">PM2.5</p>
+                    <p class = "card-value">-- µg/m³</p>
+                </div>
+                <div id="pm10" class="card">
+                    <p class = "card-title">PM10</p>
+                    <p class = "card-value">-- µg/m³</p>
+                </div>
+                <div id="co2" class="card">
+                    <p class = "card-title">CO2</p>
+                    <p class = "card-value">-- ppm</p>
+                </div>
+                <div id="tvoc" class="card">
+                    <p class = "card-title">TVOC</p>
+                    <p class = "card-value">-- ppb</p>
+                </div>
+            </div>
+        </div>
+        <h3 id="part-name">Úrovne škodlivých látok</h3>
+        <div class="positioner">
+            <table id="tableRange5" class="table">
+                <thead>
+                    <tr>
+                        <th scope="col" rowspan="3" colspan="2">Kvalita ovzdušia</th>
+                        <th scope="col" colspan="1">PM1</th>
+                        <th scope="col" colspan="1">PM2.5</th>
+                        <th scope="col" colspan="1">PM10</th>
+                        <th scope="col" colspan="1">TVOC</th>
+                    </tr>
+                    <tr>
+                        <th>1h</th>
+                        <th>1h</th>
+                        <th>1h</th>
+                        <th></th>
+                    </tr>
+                    <tr>
+                        <th>ug/m³</th>
+                        <th>ug/m³</th>
+                        <th>ug/m³</th>
+                        <th>ppb</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr scope="row">
+                        <th scope="row" id="air-quality-1" class="air-quality"></th>
+                        <td>Veľmi dobrá (1)</td>
+                        <td>0-14</td>
+                        <td>0-14</td>
+                        <td>0-20</td>
+                        <td>0-150</td>
+                    </tr>
+                    <tr scope="row">
+                        <th scope="row" id="air-quality-2" class="air-quality"></th>
+                        <td>Dobrá (2)</td>
+                        <td>14-25</td>
+                        <td>14-25</td>
+                        <td>20-40</td>
+                        <td>150-500</td>
+                    </tr>
+                    <tr scope="row">
+                        <th scope="row" id="air-quality-3" class="air-quality"></th>
+                        <td>Zhoršená (3)</td>
+                        <td>25-70</td>
+                        <td>25-70</td>
+                        <td>40-100</td>
+                        <td>500-1500</td>
+                    </tr>
+                    <tr scope="row">
+                        <th scope="row" id="air-quality-4" class="air-quality"></th>
+                        <td>Zlá (4)</td>
+                        <td>70-140</td>
+                        <td>70-140</td>
+                        <td>100-180</td>
+                        <td>1500-5000</td>
+                    </tr>
+                    <tr scope="row">
+                        <th scope="row" id="air-quality-5" class="air-quality"></th>
+                        <td>Veľmi zlá (5)</td>
+                        <td>&gt;140</td>
+                        <td>&gt;140</td>
+                        <td>&gt;180</td>
+                        <td>&gt;5000</td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+            <div class="positioner">
+            <table id="tableRange3" class="table">
+                <thead>
+                    <tr>
+                        <th scope="col" rowspan="2" colspan="2">Kvalita ovzdušia</th>
+                        <th scope="col" colspan="1">CO2</th>
+                    </tr>
+                    <tr>
+                        <th>ppm</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr scope="row">
+                        <th scope="row" id="air-quality-1" class="air-quality"></th>
+                        <td>Veľmi dobrá</td>
+                        <td>&lt;1000</td>
+                    </tr>
+                    <tr scope="row">
+                        <th scope="row" id="air-quality-2" class="air-quality"></th>
+                        <td>Zhoršená</td>
+                        <td>1000-2000</td>
+                    </tr>
+                    <tr scope="row">
+                        <th scope="row" id="air-quality-4" class="air-quality"></th>
+                        <td>Zlá</td>
+                        <td>&gt;2000</td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+        </div>
     </div>
-    <div id = "graph-buttons">
-        <button id="graph-btn-hour">Posledná hodina</button>
-        <button id="graph-btn-day">Posledný deň</button>
-        <button id="graph-btn-week">Posledný týždeň</button>
-        <button id="graph-btn-month">Posledný mesiac</button>
-        <button id="graph-btn-6months">Posledných 6 mesiacov</button>
-    </div>
-    <div id = "graphs">
-        <div id="graphDiv"></div>
-        <div id="graphDiv2"></div>
-        <div id="graphDiv3"></div>
-    </div>
-
 </body>
 </html>
