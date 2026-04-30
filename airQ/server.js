@@ -8,14 +8,13 @@ const app = express();
 const server = http.createServer(app); //http server
 const io = new Server(server); //socketIO server
 const db = new Database('air_data.db');
-db.pragma('journal_mode = WAL');//WAL for concurrent read/write access
+db.pragma('journal_mode = WAL');
 
-const MQTT_IP = 'EXAMPLE_IP'; //replace with MQTT broker IP address
-const MQTT_PORT = 'EXAMPLE_PORT'; //replace with MQTT broker port
+const MQTT_IP = '127.0.0.1'; //replace with your MQTT broker IP address
+const MQTT_PORT = '1883'; //replace with your MQTT broker port
 const MQTT_URL = `mqtt://${MQTT_IP}:${MQTT_PORT}`;
 let client;
 
-//to store latest data in memory
 let currentData = {
   timestamp: null,
   millisTimestamp: null,
@@ -42,7 +41,7 @@ function initializeDatabase() {
         pm2 REAL,
         pm10 REAL,
         co2 REAL,
-        aqi REAL,
+        aqi INTEGER,
         tvoc REAL);`);
       stmt.run();
       resolve();
@@ -66,22 +65,22 @@ function dbInsert() {
     aqi,
     tvoc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   stmt.run(
-  currentData.timestamp,
-  currentData.millisTimestamp,
-  currentData.temperature,
-  currentData.humidity,
-  currentData.pm1,
-  currentData.pm2,
-  currentData.pm10,
-  currentData.co2,
-  currentData.aqi,
-  currentData.tvoc
-);
+    currentData.timestamp,
+    currentData.millisTimestamp,
+    currentData.temperature,
+    currentData.humidity,
+    currentData.pm1,
+    currentData.pm2,
+    currentData.pm10,
+    currentData.co2,
+    currentData.aqi,
+    currentData.tvoc
+  );
 }
 
 function startServer() {
   server.listen(3000);
-  client = mqtt.connect(MQTT_URL);
+  client = mqtt.connect(MQTT_URL,{username: 'user', password: 'pass'}); //replace with your MQTT broker credentials
   client.on("connect", () => {
     client.subscribe("/example/data", {qos:1}, (err) => {
       if (!err) {
@@ -93,20 +92,24 @@ function startServer() {
   });
 
   client.on("message", (topic, message, packet) => {
+    // message is Buffer
     console.log(`${topic}: ${message.toString()}, retained: ${packet.retain}, qos: ${packet.qos}`);
+    
 
     if (topic === "/example/data") {
       const data = JSON.parse(message.toString());
       let timestamp = new Date().toISOString(); //default - expecting new data, thus using current time
-      if (!packet.retain){
-        dbInsert();
-      } else {  //if message retained on broker, get latest timestamp from DB
+      if (packet.retain) {  //if message retained on broker, get latest timestamp from DB
         const stmt = db.prepare(`SELECT timestamp FROM airQ_data ORDER BY id DESC LIMIT 1`);
         const row = stmt.get();
         timestamp = row.timestamp;
       }
       currentData = { ...currentData, ...data, timestamp: timestamp };
-      io.emit('air-update', currentData);
+      if (!packet.retain){
+        dbInsert();
+      }
+      const {millisTimestamp, ...cleanData} = currentData;
+      io.emit('air-update', cleanData);
     } else {
       console.warn(`Received message on unknown topic: ${topic}`);
     }
@@ -116,43 +119,60 @@ function startServer() {
 
 app.use(express.static('public'));
 
-//API endpoint for latest data
 app.get('/api/current', (req, res) => {
-  res.json(currentData);
+  try {
+    const {millisTimestamp, ...cleanData} = currentData;
+    res.json(cleanData);
+  } catch(e){
+    res.status(500).json({ error: 'Failed to retrieve current data' });
+  }
 });
 
-//API endpoint for historical data
+// API endpoint for historical data
 app.get('/api/:range', (req, res) => {
   const range = req.params.range;
   let timeLimit;
-  
-  switch(range) {
-    case 'hour':
-      timeLimit = new Date(Date.now() - 60 * 60 * 1000);
-      break;
-    case 'day':
-      timeLimit = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      break;
-    case 'week':
-      timeLimit = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      break;
-    case 'month':
-      timeLimit = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      break;
-    case '6months':
-      timeLimit = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
-      break;
-    default:
-      timeLimit = new Date(Date.now() - 60 * 60 * 1000);
+  const dateNow = new Date();
+  try {
+    switch(range) {
+      case 'hour':
+        timeLimit = new Date(dateNow.setHours(dateNow.getHours() - 1));
+        break;
+      case 'day':
+        timeLimit = new Date(dateNow.setDate(dateNow.getDate() - 1));
+        break;
+      case 'week':
+        timeLimit = new Date(dateNow.setDate(dateNow.getDate() - 7));
+        break;
+      case 'month':
+        timeLimit = new Date(dateNow.setMonth(dateNow.getMonth() - 1));
+        break;
+      case '6months':
+        timeLimit = new Date(dateNow.setMonth(dateNow.getMonth() - 6));
+        break;
+      default:
+        timeLimit = new Date(dateNow.setHours(dateNow.getHours() - 1));
+        break;
+    }
+  } catch (e) {
+      console.error("Error calculating time limit:", e);
+      return res.status(400).json({ error: 'Invalid range parameter' });
+    }
+  console.log("NOW:", new Date());
+  console.log("TIME LIMIT:", timeLimit);
+  console.log("SQL TIME:", timeLimit.toISOString());
+  try {
+    const stmt = db.prepare(
+      `SELECT timestamp, temperature, humidity, pm1, pm2, pm10, co2, aqi, tvoc 
+      FROM airQ_data 
+      WHERE timestamp > ? 
+      ORDER BY timestamp ASC`);
+    const rows = stmt.all(timeLimit.toISOString());
+    return res.json(rows);
+  } catch (e) {
+    console.error("Error querying database:", e);
+    return res.status(500).json({ error: 'Failed to retrieve historical data' });
   }
-  
-  const stmt = db.prepare(
-    `SELECT timestamp, temperature, humidity, pm1, pm2, pm10, co2, aqi, tvoc 
-     FROM airQ_data 
-     WHERE timestamp > ? 
-     ORDER BY timestamp ASC`);
-  const rows = stmt.all(timeLimit.toISOString());
-  res.json(rows);
 });
 
 initializeDatabase().then(() => {
