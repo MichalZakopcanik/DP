@@ -4,8 +4,6 @@
 #include <DFRobot_ENS160.h>
 //BME680
 #include <Adafruit_BME680.h>
-#include <bme68x.h>
-#include <bme68x_defs.h>
 //HM3301 - PM1.0,2.5,10
 #include "Seeed_HM330X.h"
 //I2C
@@ -14,31 +12,41 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 
-// SD card
+//SD card
 #include <SPI.h>
 #include <SD.h>
 
-//MQTT
+//Timer and MQTT
 #include <Ticker.h>
 #include <AsyncMqttClient.h>
 
+
 //-------------------------------------------------DECLARATIONS
 // WiFi
-const char* wifiSsid = "";  //replace with your wifi credentials
-const char* wifiPassword = "";
 const char* serverURL = "";
+const char* wifiSsids[] = {"wifi1", "wifi2", "wifi3"}; //replace with your wifi credentials
+const char* wifiPasswords[] = {"pass1", "pass2", "pass3"};
+size_t wifiCount = sizeof(wifiSsids)/sizeof(wifiSsids[0]);
+int currentWifi = 0;
 
-#define CO2_IN 16      //D0 - MH-Z19 PWM IN
-#define CALIB_PIN 2   //D4 - MH-Z19 Calibration pin
-#define SWITCH_PIN 0  //D3 - Calibration button
-#define CS_PIN 15  //D8 - Chip select pin
+// MQTT setup
+//Length of ips should match the wifiCount
+#define MQTT_HOST IPAddress(example_num1, example_num2, example_num3, example_num4) //replace with your MQTT IP address
+#define MQTT_PORT example_num //replace with your MQTT port
+#define MQTT_DATA_TOPIC "/example/data" //replace with your topic
 
-//SD card file
-File myFile;
-int lineCounter = 0;
+AsyncMqttClient mqttClient;
 
-//Wifi connect timer
-int connectTimer = 0;
+// Event handlers
+Ticker mqttReconnectTimer;
+WiFiEventHandler wifiConnectHandler;
+WiFiEventHandler wifiDisconnectHandler;
+
+// Wifi reconnecting
+bool shouldReconnectWifi = false;
+// MQTT reconnecting count
+int mqttReconnectCount = 0;
+#define MQTT_MAX_REC_COUNT 3
 
 //Time since the start of the program, will be used with millis() and saved into csv/json data, can calculate time of measurement if the start time of program is known
 //millis() overflows after approximately 50 daysm
@@ -57,6 +65,21 @@ int calibrateCount = 0;
 const int interval = 180000;  // 3 minutes
 unsigned long currentMillis;
 unsigned long previousMillis = 0;
+bool isWarm = false;
+
+//Measuring variables
+bool isMeasuring = true;
+static unsigned long lastMeasurementMillis = 0;
+int measurementIndex = 0;
+
+//SD card file
+File myFile;
+int lineCounter = 0;
+
+#define CO2_IN 16      //D0 - MH-Z19 PWM IN
+#define CALIB_PIN 2   //D4 - MH-Z19 Calibration pin
+#define SWITCH_PIN 0  //D3 - Calibration button
+#define CS_PIN 15  //D8 - Chip select pin
 
 //Arrays for measurements
 float tempArr[10];
@@ -68,8 +91,6 @@ float PM1Arr[10];
 float PM2Arr[10]; //PM2,5
 float PM10Arr[10];
 
-//Position of PM array element 
-int position = 0;
 
 //Avgs of measured values
 float tempAvg = 0;
@@ -81,7 +102,6 @@ float PM1Avg = 0;
 float PM2Avg = 0;
 float PM10Avg = 0;
 
-bool isWarm = false;
 
 //Sensors objects
 //I2C on pins: D2:SDA D1:SCL
@@ -91,35 +111,48 @@ MHZ co2(CO2_IN, MHZ19B);
 HM330X pm;
 u8 buf[30]; //for HM3301
 
-// MQTT setup
-#define MQTT_HOST IPAddress(example_num1, example_num2, example_num3, example_num4) //replace with your MQTT IP address
-#define MQTT_PORT example_num //replace with your MQTT port
 
-#define MQTT_PUB_DATA "/example/data" //replace with your topic
-
-AsyncMqttClient mqttClient;
-Ticker mqttReconnectTimer;
-
-WiFiEventHandler wifiConnectHandler;
-WiFiEventHandler wifiDisconnectHandler;
-Ticker wifiReconnectTimer;
-
+//---------FUNCTIONS----------
+//Wifi
 void connectToWifi() {
   Serial.println("Connecting to Wi-Fi...");
-  WiFi.begin(wifiSsid, wifiPassword);
+  int n = WiFi.scanNetworks();
+  for (int i = 0; i < n; i++){
+    if(WiFi.SSID(i)=="Pispot"){
+      Serial.println("Pispot found, connecting");
+      WiFi.begin("Pispot",wifiPasswords[0]);
+      currentWifi = 0;
+      return;
+    }
+  }
+  for (int i = 0; i < n; i++){
+    for(int j = 0; j < (int)wifiCount;j++){
+      if(WiFi.SSID(i)==wifiSsids[j]){
+        Serial.print("SSID: ");
+        Serial.println(wifiSsids[j]);
+        currentWifi = j;
+        WiFi.begin(wifiSsids[j],wifiPasswords[j]);
+        return;
+      }
+    }
+  }
+  Serial.println("No saved WiFi found.");
 }
 
 void onWifiConnect(const WiFiEventStationModeGotIP& event) {
   Serial.println("\nConnected to Wi-Fi.");
+  mqttClient.setServer(ips[currentWifi], MQTT_PORT);
   connectToMqtt();
 }
 
 void onWifiDisconnect(const WiFiEventStationModeDisconnected& event) {
   Serial.println("Disconnected from Wi-Fi.");
-  mqttReconnectTimer.detach(); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi
-  wifiReconnectTimer.once(2, connectToWifi);
+  Serial.print("Disconnect reason: ");
+  Serial.println(event.reason);
+  shouldReconnectWifi = true;
 }
 
+//MQTT
 void connectToMqtt() {
   Serial.println("Connecting to MQTT...");
   mqttClient.connect();
@@ -129,12 +162,20 @@ void onMqttConnect(bool sessionPresent) {
   Serial.println("Connected to MQTT.");
   Serial.print("Session present: ");
   Serial.println(sessionPresent);
+  mqttReconnectCount=0;
 }
 
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
   Serial.println("Disconnected from MQTT.");
-
+  
   if (WiFi.isConnected()) {
+    mqttReconnectCount++;
+    if (mqttReconnectCount >= MQTT_MAX_REC_COUNT){
+      Serial.println("Too many MQTT connection retries. Trying different wifi.");
+      mqttReconnectCount=0;
+      WiFi.disconnect();
+      return;
+    }
     mqttReconnectTimer.once(2, connectToMqtt);
   }
 }
@@ -177,33 +218,37 @@ void IRAM_ATTR handleCalibrationInterrupt() {
 /*parse buf with 29 u8-data - function for getting data from HM3301*/
 HM330XErrorCode parse_result(int position, u8 *data)
 {
-    u16 value=0;
-    if(NULL==data)
-        return ERROR_PARAM;
-    for(int i=1;i<8;i++)
-    {
-        value = (u16)data[i*2]<<8|data[i*2+1];
-        switch(i){
-          case 2:
-            PM1Arr[position] = value;
-            break;
+  u16 value=0;
+  if(NULL==data)
+    return ERROR_PARAM;
+  uint8_t sum = 0;
+  for (int i = 0; i < 28; i++) {
+    sum += data[i];
+  }
+  if (sum != data[28]) {
+    Serial.println("HM3301 checksum error!");
+    return ERROR_OTHERS;
+  }
+ 
+  PM1Arr[position] = (u16)data[4]<<8|data[5];
+  PM2Arr[position] = (u16)data[6]<<8|data[7];
+  PM10Arr[position] = (u16)data[8]<<8|data[9];
 
-          case 3:
-            PM2Arr[position] = value;
-            break;
-
-          case 4:
-            PM10Arr[position] = value;
-            break;
-
-          default:
-            break;
-        }
-    }
-
-    return NO_ERROR;
+  return NO_ERROR;
 }
 
+//Averaging measurements
+float average(float arr[]) {
+  float sum = 0;
+  int count = 0;
+  for (int i = 0; i < 10; i++) {
+    if(!isnan(arr[i])){
+      sum += arr[i];
+      count++;
+    }
+  }
+  return count > 0 ? sum / count : 0;
+}
 
 //-------------------------------------------------SETUP
 void setup() {
@@ -212,7 +257,7 @@ void setup() {
   Serial.println("Serial start");
 
   //HM3301 setup
-  if(pm.init())
+  if(pm.init() != NO_ERROR)
   {
       Serial.println("HM330X init failed!!!");
       while(1);
@@ -226,7 +271,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(SWITCH_PIN), handleCalibrationInterrupt, FALLING);
 
   bme.begin();
-  bme.setTemperatureOversampling(BME680_OS_8X);
+  bme.setTemperatureOversampling(BME680_OS_2X);
   bme.setHumidityOversampling(BME680_OS_2X);
   bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
 
@@ -241,25 +286,10 @@ void setup() {
   //mqttClient.onSubscribe(onMqttSubscribe);
   //mqttClient.onUnsubscribe(onMqttUnsubscribe);
   mqttClient.onPublish(onMqttPublish);
-  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
-  //mqttClient.setCredentials("REPlACE_WITH_YOUR_USER", "REPLACE_WITH_YOUR_PASSWORD");
-  
+  mqttClient.setCredentials("airqManager", "DPg0al26");
 
   // Connect to Wi-Fi
   connectToWifi();
-  Serial.print("Pripajam sa na WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(".");
-    if (connectTimer >= 15) {
-      break;
-    }
-    connectTimer++;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nNepodarilo sa pripojit na Wifi");
-  }
 
   //SD card setup
   Serial.print("Initializing SD card...");
@@ -281,24 +311,13 @@ void setup() {
     // print error if file didnt open
     Serial.println("error opening test.txt");
   }
-
-  // reopen the file for reading
-  myFile = SD.open("test.txt");
-  if (myFile) {
-    Serial.println("test.txt:");
-    // read from the file until theres nothing else in it
-    while (myFile.available()) { myFile.read(); lineCounter++;}
-    Serial.print("Pocet riadkov v subore: ");
-    Serial.println(lineCounter);
-    myFile.close();
-  } else {
-    // print error if file didnt open
-    Serial.println("error opening test.txt");
-  }
-
 }
 //-------------------------------------------------LOOP
 void loop() {
+  if(shouldReconnectWifi){
+    shouldReconnectWifi = false;
+    connectToWifi();
+  }
   currentMillis = millis();
 
   static unsigned long warmupStartMillis = 0;
@@ -327,54 +346,69 @@ void loop() {
 
     return;
   }
+  
+  if (isMeasuring) {
+    // measuring every 6 seconds, 10 measurement total, then averaging it -> 1 minute average
+    if(currentMillis - lastMeasurementMillis >= 6000) {
+      lastMeasurementMillis = currentMillis;
+      //BME680
+      bme.performReading();
+      tempArr[measurementIndex] = bme.temperature;
+      humArr[measurementIndex] = bme.humidity;
 
-  // measuring every 6 seconds, 10 measurement total, then averaging it -> 1 minute average
-  for (int i = 0; i < 10; i++) {
-    //BME680
-    bme.performReading();
-    tempArr[i] = bme.temperature;
-    humArr[i] = bme.humidity;
+      //MH-Z19
+      CO2Arr[measurementIndex] = co2.readCO2PWM();
 
-    //MH-Z19
-    CO2Arr[i] = co2.readCO2PWM();
+      //ENS160
+      ENS160.setTempAndHum(tempArr[measurementIndex], humArr[measurementIndex]);  //set parameters for correct AQI and TVOC measuremet
+      AQIArr[measurementIndex] = ENS160.getAQI();
+      TVOCArr[measurementIndex] = ENS160.getTVOC();
 
-    //ENS160
-    ENS160.setTempAndHum(tempArr[i], humArr[i]);  //set parameters for correct AQI and TVOC measuremet
-    AQIArr[i] = ENS160.getAQI();
-    TVOCArr[i] = ENS160.getTVOC();
+      //HM3301
+      if(pm.read_sensor_value(buf,29))//returns 0 if no error so doesnt enter if branch
+      {
+          Serial.println("HM330X read result failed!!!");
+      } 
+      else {
+        if(parse_result(measurementIndex, buf) != NO_ERROR){
+          Serial.println("HM330X data parsing failed!!!");
+          PM1Arr[measurementIndex] = NAN;
+          PM2Arr[measurementIndex] = NAN;
+          PM10Arr[measurementIndex] = NAN;
+        }
+      }
 
-    //HM3301
-    if(pm.read_sensor_value(buf,29))
-    {
-        Serial.println("HM330X read result failed!!!");
+      Serial.print(measurementIndex+1);
+      Serial.print("/10: ");
+      Serial.print(tempArr[measurementIndex]);
+      Serial.print(" °C, ");
+      Serial.print(humArr[measurementIndex]);
+      Serial.print(" %, ");
+      Serial.print(CO2Arr[measurementIndex]);
+      Serial.print(" ppm, ");
+      Serial.print(AQIArr[measurementIndex]);
+      Serial.print(" -, ");
+      Serial.print(TVOCArr[measurementIndex]);
+      Serial.print(" ppb, ");
+      Serial.print(PM1Arr[measurementIndex]);
+      Serial.print(" ug/m3, ");
+      Serial.print(PM2Arr[measurementIndex]);
+      Serial.print(" ug/m3, ");
+      Serial.print(PM10Arr[measurementIndex]);
+      Serial.println(" ug/m3");
+
+      if (calibrateRequested) {
+        Serial.println("Pred dalsim setom merani nastane kalibracia");
+      }
+
+      //Incrementing measurement
+      measurementIndex++;
+      if(measurementIndex>=10){
+        measurementIndex = 0;
+        isMeasuring = false;
+      }
     }
-    position = i;
-    parse_result(position, buf);
-
-    Serial.print(i);
-    Serial.print("/10: ");
-    Serial.print(tempArr[i]);
-    Serial.print(" °C, ");
-    Serial.print(humArr[i]);
-    Serial.print(" %, ");
-    Serial.print(CO2Arr[i]);
-    Serial.print(" ppm, ");
-    Serial.print(AQIArr[i]);
-    Serial.print(" -, ");
-    Serial.print(TVOCArr[i]);
-    Serial.print(" ppb, ");
-    Serial.print(PM1Arr[i]);
-    Serial.print(" ug/m3, ");
-    Serial.print(PM2Arr[i]);
-    Serial.print(" ug/m3, ");
-    Serial.print(PM10Arr[i]);
-    Serial.println(" ug/m3");
-
-    if (calibrateRequested) {
-      Serial.println("Pred dalsim setom merani nastane kalibracia");
-    }
-
-    delay(6000);
+    return;
   }
 
   tempAvg = average(tempArr);
@@ -386,22 +420,36 @@ void loop() {
   PM2Avg = average(PM2Arr);
   PM10Avg = average(PM10Arr);
   measurementTime = millis();
+  String co2Str = "";
+  String co2StrCsv = "";
+
+  if (!calibrating) {
+    co2Str = String(CO2Avg, 0);
+    co2StrCsv = String(CO2Avg, 0);
+  }
 
   //measuring in the for cycle above takes 1 minute, so when calibrateCount > 20, 21 minutes have passed
-  if (calibrating) {
-    CO2Avg = 0;
+  else {
     calibrateCount++;
+    co2Str = "null";
+    co2StrCsv = "";
     if (calibrateCount > 20) {
       calibrating = false;
       calibrateCount = 0;
     }
   }
-
-  //JSON print
-  //String formattedData = "{\"time\":" + String(measurementTime) + "," + "\"CO2\":" + String(CO2Avg, 0) + "," + "\"humidity\":" + String(humAvg, 1) + "," + "\"temperature\":" + String(tempAvg, 2) + "," + "\"index\":" + String((int)round(AQIAvg)) + "," + "\"tvoc\":" + String(TVOCAvg, 0) + "," + "\"pm1\":" + String(PM1Avg, 2) + "," + "\"pm2\":" + String(PM2Avg, 2) + "," + "\"pm10\":" + String(PM10Avg, 2) + "}";
   
+  String tstmpStr = String(measurementTime);
+  String tempStr = String(tempAvg, 2);
+  String humStr = String(humAvg, 1);
+  String pm1Str = String(PM1Avg, 2);
+  String pm2Str = String(PM2Avg, 2);
+  String pm10Str = String(PM10Avg, 2);
+  String aqiStr = String((int)round(AQIAvg)); //because AQI is not float
+  String tvocStr = String(TVOCAvg, 0);
+
   //CSV print
-  String formattedData = String(measurementTime) + "," + String(CO2Avg, 0) + "," + String(humAvg, 1) + "," + String(tempAvg, 2) + "," + String((int)round(AQIAvg)) + "," + String(TVOCAvg, 0) + "," + String(PM1Avg, 2) + "," + String(PM2Avg, 2) + "," + String(PM10Avg, 2);
+  String formattedData = tstmpStr + "," + co2StrCsv + "," + humStr + "," + tempStr + "," + aqiStr + "," + tvocStr + "," + pm1Str + "," + pm2Str + "," + pm10Str;
 
   Serial.print("Odoslane data: ");
   Serial.print(measurementTime);
@@ -436,35 +484,23 @@ void loop() {
     Serial.println("error opening test.txt");
   }
 
-
-  if (WiFi.status() == WL_CONNECTED) {
-    //odosielanie dat cez MQTT
-    
-    String tstmpStr = String(measurementTime);
-    String tempStr = String(tempAvg, 2);
-    String humStr = String(humAvg, 1);
-    String pm1Str = String(PM1Avg, 2);
-    String pm2Str = String(PM2Avg, 2);
-    String pm10Str = String(PM10Avg, 2);
-    String co2Str = String(CO2Avg, 0);
-    String aqiStr = String((int)round(AQIAvg));
-    String tvocStr = String(TVOCAvg, 0);
-
+  if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
+    //JSON-like message for MQTT broker
     String payload = "{"
-      "\"millisTimestamp\":\"" + tstmpStr + "\","
-      "\"temperature\":\"" + tempStr + "\","
-      "\"humidity\":\"" + humStr + "\","
-      "\"pm1\":\"" + pm1Str + "\","
-      "\"pm2\":\"" + pm2Str + "\","
-      "\"pm10\":\"" + pm10Str + "\","
-      "\"co2\":\"" + co2Str + "\","
-      "\"aqi\":\"" + aqiStr + "\","
-      "\"tvoc\":\"" + tvocStr + "\""
+      "\"millisTimestamp\":" + tstmpStr + ","
+      "\"temperature\":" + tempStr + ","
+      "\"humidity\":" + humStr + ","
+      "\"pm1\":" + pm1Str + ","
+      "\"pm2\":" + pm2Str + ","
+      "\"pm10\":" + pm10Str + ","
+      "\"co2\":" + co2Str + ","
+      "\"aqi\":" + aqiStr + ","
+      "\"tvoc\":" + tvocStr +
     "}";
 
-    mqttPublish(MQTT_PUB_DATA, payload.c_str());
+    mqttPublish(MQTT_DATA_TOPIC, payload.c_str());
 
-    /* Ak by som odosielal informacie na konkretny server
+    /* if sending info to a specific server - needs internet
     
     WiFiClient client;
     HTTPClient http;
@@ -472,6 +508,7 @@ void loop() {
 
     //pre JSON
     //http.addHeader("Content-Type", "application/json");
+    //int httpResponseCode = http.POST(payload);
 
     //pre CSV
     http.addHeader("Content-Type", "text/csv");
@@ -506,13 +543,6 @@ void loop() {
     calibrateCount = 0;
 
   }
-}
-
-//-------------------------------------------------FUNCTIONS
-float average(float arr[]) {
-  float val = 0;
-  for (int i = 0; i < 10; i++) {
-    val += arr[i];
-  }
-  return val / 10.0;
+  //Allow measuring
+  isMeasuring = true;
 }
